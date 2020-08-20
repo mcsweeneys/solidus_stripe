@@ -9,12 +9,6 @@ module Spree
       preference :v3_elements, :boolean
       preference :v3_intents, :boolean
 
-      CARD_TYPE_MAPPING = {
-        'American Express' => 'american_express',
-        'Diners Club' => 'diners_club',
-        'Visa' => 'visa'
-      }
-
       delegate :create_intent, :update_intent, :confirm_intent, :show_intent, to: :gateway
 
       def stripe_config(order)
@@ -115,39 +109,29 @@ module Spree
       def create_profile(payment)
         return unless payment.source.gateway_customer_profile_id.nil?
 
-        options = {
-          email: payment.order.email,
-          login: preferred_secret_key,
-        }.merge! address_for(payment)
+        source = payment.source
+        order = payment.order
+        user = source.user || order.user
 
-        source = update_source!(payment.source)
-        if reuse_existing_source?(source)
-          if v3_intents?
-            creditcard = ActiveMerchant::Billing::StripeGateway::StripePaymentToken.new('id' => source.gateway_payment_profile_id)
-          else
-            creditcard = source.gateway_payment_profile_id
-          end
-        else
-          creditcard = source
-        end
+        # Find or create Stripe customer
+        stripe_customer = user&.stripe_customer || Stripe::Customer.create(order.stripe_customer_params)
 
-        response = gateway.store(creditcard, options)
-        if response.success?
-          if v3_intents? && reuse_existing_source?(source)
-            payment.source.update!(
-              cc_type: payment.source.cc_type,
-              gateway_customer_profile_id: response.params['customer'],
-              gateway_payment_profile_id: response.params['id']
-            )
-          else
-            payment.source.update!(
-              cc_type: payment.source.cc_type,
-              gateway_customer_profile_id: response.params['id'],
-              gateway_payment_profile_id: response.params['default_source'] || response.params['default_card']
-            )
-          end
-        else
-          payment.send(:gateway_error, response.message)
+        # Create new Stripe card / payment method and attach to
+        # (new or existing) Stripe customer
+        if source.gateway_payment_profile_id&.starts_with?('pm_')
+          stripe_payment_method = Stripe::PaymentMethod.attach(source.gateway_payment_profile_id, customer: stripe_customer)
+          source.update!(
+            cc_type: stripe_payment_method.card.brand,
+            gateway_customer_profile_id: stripe_customer.id,
+            gateway_payment_profile_id: stripe_payment_method.id
+          )
+        elsif source.gateway_payment_profile_id&.starts_with?('tok_')
+          stripe_card = Stripe::Customer.create_source(stripe_customer.id, source: source.gateway_payment_profile_id)
+          source.update!(
+            cc_type: stripe_card.brand,
+            gateway_customer_profile_id: stripe_customer.id,
+            gateway_payment_profile_id: stripe_card.id
+          )
         end
       end
 

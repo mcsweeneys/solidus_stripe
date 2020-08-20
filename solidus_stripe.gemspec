@@ -33,6 +33,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'solidus_support', '~> 0.8'
   spec.add_dependency 'activemerchant', '>= 1.105'
   spec.add_dependency 'rexml'
+  spec.add_dependency 'stripe'
 
   spec.add_development_dependency 'solidus_dev_support', '~> 2.5'
 end
